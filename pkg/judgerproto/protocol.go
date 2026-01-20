@@ -5,7 +5,7 @@ import (
 	"fmt"
 	"time"
 
-	"github.com/lcpu-club/hpcgame-judger/pkg/aoiclient"
+	"github.com/lcpu-club/lfs-auto-grader/pkg/aoiclient"
 )
 
 type Action string

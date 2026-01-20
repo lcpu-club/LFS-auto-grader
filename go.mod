@@ -1,4 +1,4 @@
-module github.com/lcpu-club/hpcgame-judger
+module github.com/lcpu-club/lfs-auto-grader
 
 go 1.24.0
 

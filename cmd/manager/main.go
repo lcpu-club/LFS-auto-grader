@@ -5,8 +5,8 @@ import (
 	"log"
 	"os"
 
-	"github.com/lcpu-club/hpcgame-judger/internal/config"
-	"github.com/lcpu-club/hpcgame-judger/internal/manager"
+	"github.com/lcpu-club/lfs-auto-grader/internal/config"
+	"github.com/lcpu-club/lfs-auto-grader/internal/manager"
 )
 
 func defaultValue(s, def string) string {

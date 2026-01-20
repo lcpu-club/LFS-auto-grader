@@ -6,7 +6,7 @@ import (
 	"github.com/go-resty/resty/v2"
 )
 
-const DefaultUA = "hpcgame-judger/v0.1.0-alpha"
+const DefaultUA = "lfs-auto-grader/v0.1.0-alpha"
 
 type Client struct {
 	r *resty.Client

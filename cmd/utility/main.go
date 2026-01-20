@@ -4,7 +4,7 @@ import (
 	"log"
 	"os"
 
-	"github.com/lcpu-club/hpcgame-judger/pkg/aoiclient"
+	"github.com/lcpu-club/lfs-auto-grader/pkg/aoiclient"
 	"github.com/urfave/cli/v2"
 )
 
@@ -14,8 +14,8 @@ func main() {
 
 	app := cli.NewApp()
 
-	app.Name = "hpcgame-utility"
-	app.Usage = "Utility for HPC Game"
+	app.Name = "lfs-grader-utility"
+	app.Usage = "Utility for LFS Auto Grader"
 
 	app.Flags = append(app.Flags, &cli.StringFlag{
 		Name:        "endpoint",

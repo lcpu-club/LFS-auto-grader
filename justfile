@@ -12,7 +12,7 @@ build-image:
     docker build . -t lfs-auto-grader:latest
 
 run:
-    ./build/manager -redis-config="redis://localhost:6379" -endpoint="https://hpcgame.pku.edu.cn"
+    ./build/manager
 
 test:
     go test ./...

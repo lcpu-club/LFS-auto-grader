@@ -8,10 +8,10 @@ import (
 	"log"
 	"time"
 
-	"github.com/lcpu-club/hpcgame-judger/internal/config"
-	"github.com/lcpu-club/hpcgame-judger/internal/executor"
-	"github.com/lcpu-club/hpcgame-judger/pkg/aoiclient"
-	"github.com/lcpu-club/hpcgame-judger/pkg/judgerproto"
+	"github.com/lcpu-club/lfs-auto-grader/internal/config"
+	"github.com/lcpu-club/lfs-auto-grader/internal/executor"
+	"github.com/lcpu-club/lfs-auto-grader/pkg/aoiclient"
+	"github.com/lcpu-club/lfs-auto-grader/pkg/judgerproto"
 )
 
 const pollInterval = 250 * time.Millisecond
@@ -171,6 +171,13 @@ func (m *Manager) buildExecuteConfig(soln *aoiclient.SolutionPoll, rc *RunningCo
 	}
 
 	return config
+}
+
+func (m *Manager) Close() error {
+	if m.exec != nil {
+		return m.exec.Close()
+	}
+	return nil
 }
 
 func (m *Manager) processMessage(msg string, aoi *aoiclient.SolutionClient) {
