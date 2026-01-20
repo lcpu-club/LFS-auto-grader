@@ -3,16 +3,12 @@ module github.com/lcpu-club/hpcgame-judger
 go 1.23.4
 
 require (
+	github.com/docker/docker v27.4.1+incompatible
 	github.com/fedstackjs/azukiiro v0.1.8
 	github.com/go-resty/resty/v2 v2.12.0
 	github.com/mholt/archiver/v3 v3.5.1
 	github.com/redis/go-redis/v9 v9.7.0
 	github.com/urfave/cli/v2 v2.27.5
-	k8s.io/api v0.32.1
-	k8s.io/apimachinery v0.32.1
-	k8s.io/client-go v0.32.1
-	k8s.io/utils v0.0.0-20241104100929-3ea5e8cea738
-	sigs.k8s.io/controller-runtime v0.20.0
 )
 
 require (

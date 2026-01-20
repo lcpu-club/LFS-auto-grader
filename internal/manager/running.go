@@ -1,195 +1,145 @@
 package manager
 
 import (
-	"bufio"
-	"bytes"
 	"context"
+	"encoding/json"
 	"fmt"
-	"io"
 	"log"
 	"time"
 
+	"github.com/lcpu-club/hpcgame-judger/internal/executor"
 	"github.com/redis/go-redis/v9"
-	batchv1 "k8s.io/api/batch/v1"
-	corev1 "k8s.io/api/core/v1"
-	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
-	"k8s.io/apimachinery/pkg/watch"
-	"sigs.k8s.io/controller-runtime/pkg/client"
 )
 
-const nsPrefix = "j-"
-
+// RunningConfig Docker 评测配置
 type RunningConfig struct {
-	JobTemplate *batchv1.Job           `json:"jobTemplate"`
-	Variables   map[string]interface{} `json:"variables"`
+	Image       string            `json:"image"`       // Docker 镜像
+	Command     []string          `json:"command"`     // 执行命令
+	Timeout     int64             `json:"timeout"`     // 超时时间（秒）
+	MemoryLimit int64             `json:"memoryLimit"` // 内存限制（MB）
+	CPULimit    float64           `json:"cpuLimit"`    // CPU 限制（核心数）
+	Env         map[string]string `json:"env"`         // 额外环境变量
+	Variables   map[string]any    `json:"variables"`   // 模板变量
 }
 
 func (s *JudgeSession) run() error {
 	defer s.runningCleanup()
 
-	err := s.ensureNamespacePresence()
-	if err != nil {
-		return wrapError("ensureNamespacePresence", err)
-	}
+	log.Printf("Starting evaluation for solution %s, task %s", s.soln.SolutionId, s.soln.TaskId)
 
-	err = s.ensureJobPresence()
-	if err != nil {
-		return wrapError("ensureJobPresence", err)
-	}
+	// 构建执行配置
+	execConfig := s.buildExecuteConfig()
 
-	return wrapError("watchJob", s.watchJob())
+	// 使用 Docker 执行器运行
+	return s.executeWithDocker(execConfig)
 }
 
-func (s *JudgeSession) GetNamespaceName() string {
-	return nsPrefix + s.soln.TaskId
-}
-
-func (s *JudgeSession) ensureNamespacePresence() error {
-	nsName := s.GetNamespaceName()
-
-	_, err := s.m.kc.Client().CoreV1().Namespaces().Get(context.TODO(), nsName, metav1.GetOptions{})
-	if err == nil {
-		return nil
+func (s *JudgeSession) buildExecuteConfig() *executor.ExecuteConfig {
+	config := &executor.ExecuteConfig{
+		Image:       s.rc.Image,
+		Command:     s.rc.Command,
+		Timeout:     s.rc.Timeout,
+		MemoryLimit: s.rc.MemoryLimit,
+		CPULimit:    s.rc.CPULimit,
+		Env:         make(map[string]string),
+		WorkDir:     "/work",
 	}
 
-	err = s.createNamespace()
-	if err != nil {
-		return err
+	// 默认值
+	if config.Timeout == 0 {
+		config.Timeout = 300 // 默认 5 分钟
+	}
+	if config.MemoryLimit == 0 {
+		config.MemoryLimit = 512 // 默认 512MB
 	}
 
-	return nil
-}
-
-func (s *JudgeSession) createNamespace() error {
-	nsName := s.GetNamespaceName()
-
-	values := &struct {
-		Namespace string
-		Variables map[string]interface{}
-	}{
-		Namespace: nsName,
-		Variables: s.rc.Variables,
+	// 复制用户环境变量
+	for k, v := range s.rc.Env {
+		config.Env[k] = v
 	}
 
-	for _, tmpl := range s.m.tmpls {
-		buf := bytes.NewBuffer(nil)
-		err := tmpl.Execute(buf, values)
-		if err != nil {
-			return err
-		}
+	// 注入评测相关环境变量
+	config.Env["SOLUTION_ID"] = s.soln.SolutionId
+	config.Env["TASK_ID"] = s.soln.TaskId
+	config.Env["USER_ID"] = s.soln.UserId
+	config.Env["SOLUTION_DATA_URL"] = s.soln.SolutionDataUrl
+	config.Env["SOLUTION_DATA_HASH"] = s.soln.SolutionDataHash
+	config.Env["PROBLEM_DATA_URL"] = s.soln.ProblemDataUrl
+	config.Env["PROBLEM_DATA_HASH"] = s.soln.ProblemDataHash
 
-		err = s.m.kc.Create(context.TODO(), buf.String(), false)
-
-		if err != nil {
-			return err
+	// 如果有变量，序列化为 JSON
+	if s.rc.Variables != nil {
+		varsJSON, err := json.Marshal(s.rc.Variables)
+		if err == nil {
+			config.Env["JUDGE_VARIABLES"] = string(varsJSON)
 		}
 	}
 
-	log.Println("Created namespace", nsName)
-
-	return nil
-}
-
-const deleteNamespaceGracePeriods = 5
-
-func (s *JudgeSession) deleteNamespace() error {
-	err := s.m.kc.DeleteNamespace(context.TODO(), s.GetNamespaceName(), deleteNamespaceGracePeriods)
-	if err != nil {
-		return err
-	}
-
-	log.Println("Deleted namespace", s.GetNamespaceName())
-
-	clusterRoleBindingName := fmt.Sprintf("%s-judge-binding", s.GetNamespaceName())
-	err = s.m.kc.Client().RbacV1().
-		ClusterRoleBindings().Delete(context.TODO(), clusterRoleBindingName, metav1.DeleteOptions{})
-	if client.IgnoreNotFound(err) != nil {
-		log.Println("Failed to delete cluster role binding:", err)
-	}
-
-	return nil
-}
-
-func (s *JudgeSession) GetJobName() string {
-	// HARDCODED NAME
-	return "judge"
-}
-
-func (s *JudgeSession) ensureJobPresence() error {
-	jobName := s.GetJobName()
-
-	_, err := s.m.kc.Client().BatchV1().Jobs(s.GetNamespaceName()).Get(context.TODO(), jobName, metav1.GetOptions{})
-	if err == nil {
-		return nil
-	}
-
-	err = s.createJob()
-	if err != nil {
-		return err
-	}
-
-	log.Println("Created job", s.GetNamespaceName(), jobName)
-
-	return nil
-}
-
-func (s *JudgeSession) createJob() error {
-	if s.rc.JobTemplate == nil {
-		return fmt.Errorf("job template is nil")
-	}
-
-	job := s.rc.JobTemplate.DeepCopy()
-	job.Namespace = s.GetNamespaceName()
-	job.Name = s.GetJobName()
-
-	// Insert download environment variables
-	const varName = "SOLUTION_URL"
-	for k := range job.Spec.Template.Spec.Containers {
-		for _, env := range job.Spec.Template.Spec.Containers[k].Env {
-			if env.Name == varName {
-				// Unset if exists
-				job.Spec.Template.Spec.Containers[k].Env = append(job.Spec.Template.Spec.Containers[k].Env[:k], job.Spec.Template.Spec.Containers[k].Env[k+1:]...)
-				break
-			}
-		}
-
-		job.Spec.Template.Spec.Containers[k].Env = append(job.Spec.Template.Spec.Containers[k].Env, corev1.EnvVar{
-			Name:  varName,
-			Value: s.soln.SolutionDataUrl,
+	// 添加数据目录挂载
+	if *s.m.conf.SharedVolumePath != "" {
+		config.Mounts = append(config.Mounts, executor.Mount{
+			Source:   *s.m.conf.SharedVolumePath,
+			Target:   "/data",
+			ReadOnly: true,
 		})
 	}
 
-	_, err := s.m.kc.Client().BatchV1().Jobs(s.GetNamespaceName()).Create(context.TODO(), job, metav1.CreateOptions{})
-	return err
+	return config
 }
 
-func (s *JudgeSession) getPodLogsOfJob(follow bool, since *time.Time) (io.ReadCloser, error) {
-	jobName := s.GetJobName()
+func (s *JudgeSession) executeWithDocker(config *executor.ExecuteConfig) error {
+	ctx := context.Background()
 
-	pods, err := s.m.kc.Client().CoreV1().Pods(s.GetNamespaceName()).List(context.TODO(), metav1.ListOptions{
-		LabelSelector: fmt.Sprintf("job-name=%s", jobName),
+	// 创建执行上下文（带超时）
+	execCtx, cancel := context.WithTimeout(ctx, time.Duration(config.Timeout)*time.Second)
+	defer cancel()
+
+	// 执行评测，并实时处理日志
+	result, err := s.m.exec.ExecuteWithLogs(execCtx, config, func(line string) error {
+		// 处理每一行日志
+		log.Printf("[%s] Log: %s", s.soln.SolutionId, line)
+
+		// 尝试解析为评测消息
+		if err := s.processMessage(line); err != nil {
+			log.Printf("Failed to process message: %v", err)
+			// 不中断执行
+		}
+
+		// 更新处理时间戳
+		now := time.Now()
+		s.updateProcessedTimestamp(&now)
+
+		return nil
 	})
+
 	if err != nil {
-		return nil, err
+		return fmt.Errorf("docker execution failed: %w", err)
 	}
 
-	if len(pods.Items) == 0 {
-		return nil, nil
+	// 处理执行结果
+	if result.TimedOut {
+		log.Printf("Solution %s timed out", s.soln.SolutionId)
+	}
+	if result.OOM {
+		log.Printf("Solution %s ran out of memory", s.soln.SolutionId)
 	}
 
-	podName := pods.Items[0].Name
+	log.Printf("Solution %s finished with exit code %d", s.soln.SolutionId, result.ExitCode)
 
-	opts := &corev1.PodLogOptions{
-		Follow: follow,
-	}
-	if since != nil {
-		opts.SinceTime = &metav1.Time{Time: *since}
-	}
-	logReq := s.m.kc.Client().CoreV1().Pods(s.GetNamespaceName()).GetLogs(podName, opts)
-	reader, err := logReq.Stream(context.TODO())
+	// 确保完成评测
+	s.aoi.Complete(context.TODO())
 
-	return reader, err
+	return nil
 }
+
+func (s *JudgeSession) runningCleanup() {
+	err := s.deleteProcessedTimestamp()
+	if err != nil {
+		log.Println("Failed to delete processed timestamp:", err)
+	}
+}
+
+// Redis 时间戳相关方法
 
 func (s *JudgeSession) processedTimestampKey() string {
 	return fmt.Sprintf("judge:processed:%s", s.id)
@@ -202,7 +152,6 @@ func (s *JudgeSession) updateProcessedTimestamp(t *time.Time) error {
 func (s *JudgeSession) getProcessedTimestamp() (*time.Time, error) {
 	t, err := s.m.r.Client.Get(context.TODO(), s.processedTimestampKey()).Result()
 
-	// If not exist, return nil, nil
 	if err == redis.Nil {
 		return nil, nil
 	}
@@ -220,152 +169,4 @@ func (s *JudgeSession) getProcessedTimestamp() (*time.Time, error) {
 
 func (s *JudgeSession) deleteProcessedTimestamp() error {
 	return s.m.r.Client.Del(context.TODO(), s.processedTimestampKey()).Err()
-}
-
-func (s *JudgeSession) runningCleanup() {
-	err := s.deleteProcessedTimestamp()
-	if err != nil {
-		log.Println("Failed to delete processed timestamp:", err)
-	}
-	err = s.deleteNamespace()
-	if err != nil {
-		log.Println("Failed to delete namespace:", err)
-	}
-}
-
-func calcReadyAndFinishedPods(job batchv1.JobStatus) int {
-	ready := 0
-	if job.Ready != nil {
-		ready = int(*job.Ready)
-	}
-	// active := int(job.Active)
-	finished := int(job.Succeeded + job.Failed)
-	terminating := 0
-	if job.Terminating != nil {
-		terminating = int(*job.Terminating)
-	}
-	return ready + finished + terminating
-}
-
-const watchJobTimeout = 20 * time.Minute
-
-func (s *JudgeSession) watchJobTillReady() error {
-	jobName := s.GetJobName()
-
-	watcher, err := s.m.kc.Client().BatchV1().Jobs(s.GetNamespaceName()).Watch(context.TODO(), metav1.ListOptions{
-		FieldSelector: fmt.Sprintf("metadata.name=%s", jobName),
-	})
-	if err != nil {
-		return err
-	}
-	defer watcher.Stop()
-
-	// Check for status, in case it's already running
-	job, err := s.m.kc.Client().BatchV1().Jobs(s.GetNamespaceName()).Get(context.TODO(), jobName, metav1.GetOptions{})
-	if err != nil {
-		return err
-	}
-	if job.Status.Active > 0 {
-		if job.Status.Ready != nil && *job.Status.Ready > 0 {
-			return nil
-		}
-	}
-	if job.Status.Succeeded > 0 || job.Status.Failed > 0 {
-		return nil
-	}
-	if calcReadyAndFinishedPods(job.Status) > 0 {
-		return nil
-	}
-	log.Println("Job not ready yet", s.GetNamespaceName())
-
-	// Wait for the job to start running
-	for {
-		select {
-		case event, ok := <-watcher.ResultChan():
-			if !ok {
-				return fmt.Errorf("watcher channel closed unexpectedly")
-			}
-
-			job, ok := event.Object.(*batchv1.Job)
-			if !ok {
-				continue
-			}
-
-			// Check if the job has started running
-			if job.Status.Active > 0 {
-				if job.Status.Ready != nil && *job.Status.Ready > 0 {
-					return nil
-				}
-			}
-			if job.Status.Succeeded > 0 || job.Status.Failed > 0 {
-				return nil
-			}
-
-			if event.Type != watch.Added && event.Type != watch.Modified {
-				return fmt.Errorf("job not running: %s", job.Status.String())
-			}
-		case <-time.After(watchJobTimeout):
-			return fmt.Errorf("timed out waiting for job %s to be ready", job)
-		}
-	}
-}
-
-func (s *JudgeSession) watchJob() error {
-	err := s.watchJobTillReady()
-	if err != nil {
-		return wrapError("waitJobTillReady", err)
-	}
-
-	log.Println("Job started running", s.GetNamespaceName())
-
-	// Get the timestamp before starting the log pulling loop
-	since, err := s.getProcessedTimestamp()
-	if err != nil {
-		return wrapError("getProcessedTimestamp", err)
-	}
-
-	// Start the log pulling loop
-	return wrapError("pullJobLogs", s.pullJobLogs(since))
-}
-
-func (s *JudgeSession) pullJobLogs(since *time.Time) error {
-	reader, err := s.getPodLogsOfJob(true, since)
-	if err != nil {
-		return wrapError("getPodLogsOfJob", err)
-	}
-	defer reader.Close()
-
-	buf := bufio.NewReader(reader)
-	for {
-		line, err := buf.ReadBytes('\n')
-		if err != nil {
-			if err == io.EOF {
-				break
-			}
-			return err
-		}
-		lineStr := string(line)
-		if lineStr == "" {
-			continue
-		}
-
-		// Process each line as an action
-		// TODO: real processing logic
-		log.Printf("Action: %s", lineStr)
-		err = s.processMessage(lineStr)
-		if err != nil {
-			return wrapError("processMessage", err)
-		}
-
-		// Update the processed timestamp
-		now := time.Now()
-		if err := s.updateProcessedTimestamp(&now); err != nil {
-			return wrapError("updateProcessedTimestamp", err)
-		}
-	}
-
-	// MUST complete the job, otherwise maybe not completed
-	s.aoi.Complete(context.TODO())
-
-	return nil
 }

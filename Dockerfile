@@ -1,12 +1,19 @@
-# Use distroless as minimal base image to package the manager binary
-# Refer to https://github.com/GoogleContainerTools/distroless for more details
-FROM crmirror.lcpu.dev/gcr.io/distroless/static:nonroot
-# FROM crmirror.lcpu.dev/docker.io/library/ubuntu:24.04
-ARG TARGETOS
-ARG TARGETARCH
+# Build stage
+FROM golang:1.23-alpine AS builder
 
-WORKDIR /
-COPY ./build/manager-${TARGETARCH} manager
-USER 65532:65532
+WORKDIR /app
+COPY go.mod go.sum ./
+RUN go mod download
 
-ENTRYPOINT ["/manager"]
+COPY . .
+RUN CGO_ENABLED=0 go build -o manager ./cmd/manager
+
+# Runtime stage
+FROM alpine:3.19
+
+RUN apk add --no-cache docker-cli
+
+WORKDIR /app
+COPY --from=builder /app/manager .
+
+ENTRYPOINT ["/app/manager"]

@@ -4,17 +4,15 @@ build-utility:
     go build -o ./build/utility ./cmd/utility
 
 build-manager:
-    CGO_ENABLED=0 GOARCH=amd64 go build -o ./build/manager-amd64 ./cmd/manager
-    CGO_ENABLED=0 GOARCH=arm64 go build -o ./build/manager-arm64 ./cmd/manager
-
-build-manager-amd64:
-    go build -o ./build/manager-amd64 ./cmd/manager
+    CGO_ENABLED=0 go build -o ./build/manager ./cmd/manager
 
 build: build-utility build-manager
 
-build-image: build-manager
-    docker build . -t crmirror.lcpu.dev/xtlsoft/hpcgame-judger:v0.1.0 --platform=linux/amd64,arm64
-    docker push crmirror.lcpu.dev/xtlsoft/hpcgame-judger:v0.1.0
+build-image:
+    docker build . -t lfs-auto-grader:latest
 
-deploy:
-    kubectl apply -f ./manifests
+run:
+    ./build/manager -redis-config="redis://localhost:6379" -endpoint="https://hpcgame.pku.edu.cn"
+
+test:
+    go test ./...

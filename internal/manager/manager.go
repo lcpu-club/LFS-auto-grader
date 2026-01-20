@@ -4,31 +4,26 @@ import (
 	"errors"
 	"log"
 	"os"
-	"text/template"
 
 	"github.com/lcpu-club/hpcgame-judger/internal/config"
-	"github.com/lcpu-club/hpcgame-judger/internal/kube"
+	"github.com/lcpu-club/hpcgame-judger/internal/executor"
 	"github.com/lcpu-club/hpcgame-judger/internal/utils"
 	"github.com/lcpu-club/hpcgame-judger/pkg/aoiclient"
 )
 
 type Manager struct {
 	conf *config.ManagerConfig
-	sm   *utils.SecretManager
-	kc   *kube.Client
 	aoi  *aoiclient.Client
 	r    *Redis
 	rl   *RateLimiter
+	exec *executor.DockerExecutor
 
 	managerID string
-
-	tmpls []*template.Template
 }
 
 func NewManager(conf *config.ManagerConfig) *Manager {
 	return &Manager{
 		conf: conf,
-		sm:   utils.NewSecretManager(*conf.KubeSecretPath),
 	}
 }
 
@@ -48,12 +43,14 @@ func (m *Manager) genID() {
 }
 
 func (m *Manager) Init() error {
-	kc, err := kube.NewClient(*m.conf.Kubernetes, m.sm)
+	// 初始化 Docker 执行器
+	exec, err := executor.NewDockerExecutor()
 	if err != nil {
 		return err
 	}
-	m.kc = kc
+	m.exec = exec
 
+	// 初始化 AOI 客户端
 	aoi := aoiclient.New(*m.conf.Endpoint)
 	if *m.conf.RunnerID != "" || *m.conf.RunnerKey != "" {
 		aoi.Authenticate(*m.conf.RunnerID, *m.conf.RunnerKey)
@@ -62,6 +59,7 @@ func (m *Manager) Init() error {
 	}
 	m.aoi = aoi
 
+	// 初始化 Redis
 	r, err := NewRedis(*m.conf.RedisConfig)
 	if err != nil {
 		return err
@@ -70,11 +68,7 @@ func (m *Manager) Init() error {
 
 	m.genID()
 
-	err = m.loadTemplates()
-	if err != nil {
-		return err
-	}
-
+	// 初始化速率限制器
 	m.rl = NewRateLimiter(m.r, "ratelimit", "ratelimit:total")
 	return m.rl.Init(*m.conf.RateLimit)
 }
