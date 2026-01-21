@@ -1,5 +1,5 @@
 {
-  "label": "lfs-1",
+  "label": "lfs",
   "solution": {
     "description": "LFS Assignment 1 - Basics",
     "languages": ["python"]
@@ -7,18 +7,30 @@
   "judge": {
     "adapter": "lfs1",
     "config": {
-      "image": "lfs-judge:latest",
+      "image": "crmirror.lcpu.dev/lfs/lfs-judge:latest",
       "pre_cmd": [],
       "docker_cmd": ["/run.sh"],
       "post_cmd": [],
       "timeout": 600,
-      "memoryLimit": 1024,
-      "cpuLimit": 1.0,
+      "memoryLimit": 4096,
+      "cpuLimit": 8.0,
       "env": {
-        "PYTHONUNBUFFERED": "1"
+        "PYTHONUNBUFFERED": "1",
+        "UV_CACHE_DIR": "/uv-cache"
       },
       "workDir": "/home/judge",
-      "mounts": [],
+      "mounts": [
+        {
+          "source": "/data/lfs-tests/lfs-1",
+          "target": "/lfs-tests",
+          "readOnly": true
+        },
+        {
+          "source": "/data/lfs-uv",
+          "target": "/uv-cache",
+          "readOnly": false
+        }
+      ],
       "variables": {
         "report_path": "/home/judge/report.json"
       }
@@ -26,6 +38,6 @@
   },
   "submit": {
     "maxSize": 10485760,
-    "allowedExtensions": [".tar.gz", ".zip", ".py"]
+    "allowedExtensions": [".tar.gz", ".zip"]
   }
 }
