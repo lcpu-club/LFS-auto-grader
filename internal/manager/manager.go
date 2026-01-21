@@ -251,8 +251,8 @@ func (m *Manager) run(soln *aoiclient.SolutionPoll) error {
 		log.Printf("Solution %s finished with non-zero exit code %d and no report", soln.SolutionId, result.ExitCode)
 		aoi.Patch(context.TODO(), &aoiclient.SolutionInfo{
 			Score:   0,
-			Status:  aoiclient.StatusInternalError,
-			Message: fmt.Sprintf("评测异常退出（退出码 %d），未找到评测报告", result.ExitCode),
+			Status:  aoiclient.StatusWrongAnswer,
+			Message: fmt.Sprintf("未找到评测报告", result.ExitCode),
 		})
 	}
 
