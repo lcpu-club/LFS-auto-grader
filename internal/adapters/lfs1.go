@@ -77,7 +77,7 @@ func CalculateScore(report *PytestReport) *LFS1Result {
 		status = aoiclient.StatusAccepted
 		message = fmt.Sprintf("全部通过 %d/%d 测试点", passed, total)
 	} else if passed > 0 {
-		status = aoiclient.StatusSuccess
+		status = aoiclient.StatusWrongAnswer
 		message = fmt.Sprintf("通过 %d/%d 测试点，失败 %d 个", passed, total, summary.Failed)
 	} else {
 		status = aoiclient.StatusWrongAnswer
