@@ -112,34 +112,65 @@ func outcomeToStatus(outcome string) string {
 	}
 }
 
-// generateTestSummary 生成测试用例的摘要信息
+// getTestDuration 获取测试用例的执行时间
+func getTestDuration(test *PytestTestCase) float64 {
+	var duration float64
+	if test.Setup != nil {
+		duration += test.Setup.Duration
+	}
+	if test.Call != nil {
+		duration += test.Call.Duration
+	}
+	if test.Teardown != nil {
+		duration += test.Teardown.Duration
+	}
+	return duration
+}
+
+// formatDuration 格式化时间显示
+func formatDuration(duration float64) string {
+	if duration < 0.001 {
+		return fmt.Sprintf("%.3fms", duration*1000)
+	} else if duration < 1 {
+		return fmt.Sprintf("%.3fs", duration)
+	}
+	return fmt.Sprintf("%.2fs", duration)
+}
+
+// generateTestSummary 生成测试用例的摘要信息（包含运行时间）
 func generateTestSummary(test *PytestTestCase) string {
+	duration := getTestDuration(test)
+	durationStr := formatDuration(duration)
+
+	var summary string
 	switch test.Outcome {
 	case "passed":
-		return "通过"
+		summary = "通过"
 	case "xfailed":
-		return "预期失败"
+		summary = "预期失败"
 	case "xpassed":
-		return "预期失败但通过"
+		summary = "预期失败但通过"
 	case "skipped":
-		return "跳过"
+		summary = "跳过"
 	case "failed":
 		// 尝试从 call.crash.message 获取错误信息
 		if test.Call != nil && test.Call.Crash != nil && test.Call.Crash.Message != "" {
-			return test.Call.Crash.Message
-		}
-		// 如果没有 crash 信息，尝试从 longrepr 获取（截取前 200 字符）
-		if test.Call != nil && test.Call.Longrepr != "" {
+			summary = test.Call.Crash.Message
+		} else if test.Call != nil && test.Call.Longrepr != "" {
+			// 如果没有 crash 信息，尝试从 longrepr 获取（截取前 200 字符）
 			longrepr := test.Call.Longrepr
 			if len(longrepr) > 200 {
 				longrepr = longrepr[:200] + "..."
 			}
-			return longrepr
+			summary = longrepr
+		} else {
+			summary = "测试失败"
 		}
-		return "测试失败"
 	default:
-		return test.Outcome
+		summary = test.Outcome
 	}
+
+	return fmt.Sprintf("%s (%s)", summary, durationStr)
 }
 
 // CalculateScore 根据 pytest 报告计算分数
