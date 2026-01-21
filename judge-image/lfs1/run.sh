@@ -46,6 +46,7 @@ rm -rf ./tests
 cp -r /lfs-tests/ ./tests
 rm -rf ./tests/adapters.py
 cp /tmp/adapters.py ./tests/adapters.py
+echo "3.13" >> .python-version
 uv sync
 uv add pytest-json-report
 uv run pytest --json-report --json-report-file=report.json || true

@@ -4,6 +4,7 @@
     "description": "LFS Assignment 1 - Basics",
     "languages": ["python"]
   },
+  "upload": true,
   "judge": {
     "adapter": "lfs1",
     "config": {
@@ -42,7 +43,6 @@
     }
   },
   "submit": {
-    "maxSize": 10485760,
-    "allowedExtensions": [".tar.gz", ".zip"]
+    "upload": true
   }
 }
