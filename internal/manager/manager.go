@@ -246,14 +246,23 @@ func (m *Manager) run(soln *aoiclient.SolutionPoll) error {
 		}
 	}
 
-	// 如果没有处理报告且容器异常退出
-	if !reportProcessed && result.ExitCode != 0 {
-		log.Printf("Solution %s finished with non-zero exit code %d and no report", soln.SolutionId, result.ExitCode)
-		aoi.Patch(context.TODO(), &aoiclient.SolutionInfo{
-			Score:   0,
-			Status:  aoiclient.StatusWrongAnswer,
-			Message: fmt.Sprintf("未找到评测报告", result.ExitCode),
-		})
+	// 如果没有处理报告，设置错误状态
+	if !reportProcessed {
+		if result.ExitCode != 0 {
+			log.Printf("Solution %s finished with non-zero exit code %d and no report", soln.SolutionId, result.ExitCode)
+			aoi.Patch(context.TODO(), &aoiclient.SolutionInfo{
+				Score:   0,
+				Status:  aoiclient.StatusRuntimeError,
+				Message: fmt.Sprintf("评测失败，退出码 %d，未找到评测报告", result.ExitCode),
+			})
+		} else {
+			log.Printf("Solution %s finished with exit code 0 but no report found", soln.SolutionId)
+			aoi.Patch(context.TODO(), &aoiclient.SolutionInfo{
+				Score:   0,
+				Status:  aoiclient.StatusInternalError,
+				Message: "评测容器正常退出但未生成评测报告",
+			})
+		}
 	}
 
 	// 完成评测
