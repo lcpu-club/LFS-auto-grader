@@ -259,7 +259,7 @@ func (m *Manager) run(soln *aoiclient.SolutionPoll) error {
 			log.Printf("Solution %s finished with exit code 0 but no report found", soln.SolutionId)
 			aoi.Patch(context.TODO(), &aoiclient.SolutionInfo{
 				Score:   0,
-				Status:  aoiclient.StatusInternalError,
+				Status:  aoiclient.StatusRuntimeError,
 				Message: "评测容器正常退出但未生成评测报告",
 			})
 		}
