@@ -46,6 +46,13 @@ type PytestTestCase struct {
 	Teardown *PytestTestPhase `json:"teardown,omitempty"`
 }
 
+// PytestCollector pytest 收集器信息（用于检测收集阶段的错误）
+type PytestCollector struct {
+	NodeID   string `json:"nodeid"`
+	Outcome  string `json:"outcome"`
+	Longrepr string `json:"longrepr,omitempty"`
+}
+
 // PytestReport pytest --json-report 产出的 JSON 结构
 type PytestReport struct {
 	Created     float64             `json:"created"`
@@ -54,6 +61,7 @@ type PytestReport struct {
 	Root        string              `json:"root"`
 	Environment map[string]any      `json:"environment"`
 	Summary     PytestReportSummary `json:"summary"`
+	Collectors  []PytestCollector   `json:"collectors"`
 	Tests       []PytestTestCase    `json:"tests"`
 }
 
@@ -173,6 +181,45 @@ func generateTestSummary(test *PytestTestCase) string {
 	return fmt.Sprintf("%s (%s)", summary, durationStr)
 }
 
+// getCollectionErrors 从 collectors 中提取收集阶段的错误
+func getCollectionErrors(collectors []PytestCollector) []PytestCollector {
+	var errors []PytestCollector
+	for _, c := range collectors {
+		if c.Outcome == "failed" && c.NodeID != "" {
+			errors = append(errors, c)
+		}
+	}
+	return errors
+}
+
+// extractErrorSummary 从 longrepr 中提取简短的错误摘要
+func extractErrorSummary(longrepr string) string {
+	// 查找最后一行（通常是实际的错误信息，如 "ModuleNotFoundError: No module named 'xxx'"）
+	lines := strings.Split(longrepr, "\n")
+	for i := len(lines) - 1; i >= 0; i-- {
+		line := strings.TrimSpace(lines[i])
+		if line != "" && !strings.HasPrefix(line, "E ") {
+			// 如果是以 "E   " 开头的行，去掉前缀
+			if idx := strings.Index(line, "Error:"); idx != -1 {
+				return line
+			}
+		}
+		// 检查是否是 "E   XxxError: xxx" 格式
+		if strings.HasPrefix(line, "E ") {
+			errLine := strings.TrimPrefix(line, "E ")
+			errLine = strings.TrimSpace(errLine)
+			if strings.Contains(errLine, "Error:") || strings.Contains(errLine, "Exception:") {
+				return errLine
+			}
+		}
+	}
+	// 如果找不到特定格式，返回截断的原文
+	if len(longrepr) > 200 {
+		return longrepr[:200] + "..."
+	}
+	return longrepr
+}
+
 // CalculateScore 根据 pytest 报告计算分数
 // 分数 = (passed / total) * 100
 func CalculateScore(report *PytestReport) *LFS1Result {
@@ -180,6 +227,61 @@ func CalculateScore(report *PytestReport) *LFS1Result {
 	total := summary.Total
 	// xfailed 算作通过
 	passed := summary.Passed + summary.XFailed
+
+	// 首先检查是否有收集阶段的错误
+	collectionErrors := getCollectionErrors(report.Collectors)
+	if total == 0 && len(collectionErrors) > 0 {
+		// 收集阶段出错，无法执行任何测试
+		var errorMessages []string
+		jobs := make([]*aoiclient.SolutionDetailsJob, 0, len(collectionErrors))
+
+		for _, ce := range collectionErrors {
+			errorSummary := extractErrorSummary(ce.Longrepr)
+			errorMessages = append(errorMessages, ce.NodeID)
+
+			// 为每个收集错误创建一个 Job
+			jobs = append(jobs, &aoiclient.SolutionDetailsJob{
+				Name:       ce.NodeID,
+				Score:      0,
+				ScoreScale: 1,
+				Status:     aoiclient.StatusInternalError,
+				Summary:    errorSummary,
+				Tests:      []*aoiclient.SolutionDetailsTest{},
+			})
+		}
+
+		message := fmt.Sprintf("测试收集失败: %d 个模块无法导入", len(collectionErrors))
+
+		details := &aoiclient.SolutionDetails{
+			Version: 1,
+			Summary: message + "\n失败模块: " + strings.Join(errorMessages, ", "),
+			Jobs:    jobs,
+		}
+
+		return &LFS1Result{
+			Score:   0,
+			Status:  aoiclient.StatusInternalError,
+			Message: message,
+			Details: details,
+		}
+	}
+
+	// 检查 total 为 0 但没有明确的收集错误（可能是其他原因导致）
+	if total == 0 && report.ExitCode != 0 {
+		message := fmt.Sprintf("测试执行异常，退出码: %d", report.ExitCode)
+		details := &aoiclient.SolutionDetails{
+			Version: 1,
+			Summary: message,
+			Jobs:    []*aoiclient.SolutionDetailsJob{},
+		}
+
+		return &LFS1Result{
+			Score:   0,
+			Status:  aoiclient.StatusInternalError,
+			Message: message,
+			Details: details,
+		}
+	}
 
 	// 计算分数
 	var score float64
@@ -193,7 +295,11 @@ func CalculateScore(report *PytestReport) *LFS1Result {
 	var status string
 	var message string
 
-	if summary.Failed == 0 && passed == total {
+	if total == 0 {
+		// 没有任何测试用例（正常情况下不应该发生，但作为防御性编程）
+		status = aoiclient.StatusInternalError
+		message = "未找到任何测试用例"
+	} else if summary.Failed == 0 && passed == total {
 		status = aoiclient.StatusAccepted
 		message = fmt.Sprintf("全部通过 %d/%d 测试点", passed, total)
 	} else if passed > 0 {
